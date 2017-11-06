@@ -35,7 +35,7 @@ import collections as _collections
 
 import six as _six
 
-from tensorflow.python.platform import tf_logging as _tf_logging
+from tensorflow.python import pywrap_tensorflow as _pywrap_tensorflow
 from tensorflow.python.util.all_util import remove_undocumented
 
 
@@ -91,26 +91,6 @@ def _yield_value(iterable):
       yield value
 
 
-def _yield_flat_nest(nest):
-  for n in _yield_value(nest):
-    if is_sequence(n):
-      for ni in _yield_flat_nest(n):
-        yield ni
-    else:
-      yield n
-
-
-# Used by `_warn_once` to remember which warning messages have been given.
-_ALREADY_WARNED = {}
-
-
-def _warn_once(message):
-  """Logs a warning message, once per unique string."""
-  if message not in _ALREADY_WARNED:
-    _ALREADY_WARNED[message] = True
-    _tf_logging.warning(message)
-
-
 def is_sequence(seq):
   """Returns a true if its input is a collections.Sequence (except strings).
 
@@ -121,13 +101,7 @@ def is_sequence(seq):
     True if the sequence is a not a string and is a collections.Sequence or a
     dict.
   """
-  if isinstance(seq, dict):
-    return True
-  if isinstance(seq, set):
-    _warn_once("Sets are not currently considered sequences, but this may "
-               "change in the future, so consider avoiding using them.")
-  return (isinstance(seq, _collections.Sequence)
-          and not isinstance(seq, _six.string_types))
+  return _pywrap_tensorflow.IsSequence(seq)
 
 
 def flatten(nest):
@@ -145,6 +119,9 @@ def flatten(nest):
   a correponding plain dict, or vice-versa.
   Dictionaries with non-sortable keys cannot be flattened.
 
+  Users must not modify any collections used in `nest` while this function is
+  running.
+
   Args:
     nest: an arbitrarily nested structure or a scalar object. Note, numpy
         arrays are considered scalars.
@@ -155,10 +132,7 @@ def flatten(nest):
   Raises:
     TypeError: The nest is or contains a dict with non-sortable keys.
   """
-  if is_sequence(nest):
-    return list(_yield_flat_nest(nest))
-  else:
-    return [nest]
+  return _pywrap_tensorflow.Flatten(nest)
 
 
 def _recursive_assert_same_structure(nest1, nest2, check_types):
@@ -630,6 +604,71 @@ def map_structure_up_to(shallow_tree, func, *inputs):
   return pack_sequence_as(structure=shallow_tree, flat_sequence=results)
 
 
+def get_traverse_shallow_structure(traverse_fn, structure):
+  """Generates a shallow structure from a `traverse_fn` and `structure`.
+
+  `traverse_fn` must accept any possible subtree of `structure` and return
+  a depth=1 structure containing `True` or `False` values, describing which
+  of the top-level subtrees may be traversed.  It may also
+  return scalar `True` or `False` "traversal is OK / not OK for all subtrees."
+
+  Examples are available in the unit tests (nest_test.py).
+
+  Args:
+    traverse_fn: Function taking a substructure and returning either a scalar
+      `bool` (whether to traverse that substructure or not) or a depth=1
+      shallow structure of the same type, describing which parts of the
+      substructure to traverse.
+    structure: The structure to traverse.
+
+  Returns:
+    A shallow structure containing python bools, which can be passed to
+    `map_structure_up_to` and `flatten_up_to`.
+
+  Raises:
+    TypeError: if `traverse_fn` returns a sequence for a non-sequence input,
+      or a structure with depth higher than 1 for a sequence input,
+      or if any leaf values in the returned structure or scalar are not type
+      `bool`.
+  """
+  to_traverse = traverse_fn(structure)
+  if not is_sequence(structure):
+    if not isinstance(to_traverse, bool):
+      raise TypeError("traverse_fn returned structure: %s for non-structure: %s"
+                      % (to_traverse, structure))
+    return to_traverse
+  level_traverse = []
+  if isinstance(to_traverse, bool):
+    if not to_traverse:
+      # Do not traverse this substructure at all.  Exit early.
+      return False
+    else:
+      # Traverse the entire substructure.
+      for branch in _yield_value(structure):
+        level_traverse.append(
+            get_traverse_shallow_structure(traverse_fn, branch))
+  elif not is_sequence(to_traverse):
+    raise TypeError("traverse_fn returned a non-bool scalar: %s for input: %s"
+                    % (to_traverse, structure))
+  else:
+    # Traverse some subset of this substructure.
+    assert_shallow_structure(to_traverse, structure)
+    for t, branch in zip(_yield_value(to_traverse), _yield_value(structure)):
+      if not isinstance(t, bool):
+        raise TypeError(
+            "traverse_fn didn't return a depth=1 structure of bools.  saw: %s "
+            " for structure: %s" % (to_traverse, structure))
+      if t:
+        level_traverse.append(
+            get_traverse_shallow_structure(traverse_fn, branch))
+      else:
+        level_traverse.append(False)
+  return _sequence_like(structure, level_traverse)
+
+
+_pywrap_tensorflow.RegisterSequenceClass(_collections.Sequence)
+
+
 _allowed_symbols = [
     "assert_same_structure",
     "is_sequence",
@@ -640,6 +679,7 @@ _allowed_symbols = [
     "assert_shallow_structure",
     "flatten_up_to",
     "map_structure_up_to",
+    "get_traverse_shallow_structure",
 ]
 
 remove_undocumented(__name__, _allowed_symbols)

@@ -100,13 +100,13 @@ enum class TFRNNInputMode {
 };
 
 namespace {
-using perftools::gputools::dnn::RnnMode;
-using perftools::gputools::dnn::RnnInputMode;
-using perftools::gputools::dnn::RnnDirectionMode;
-using perftools::gputools::dnn::ToDataType;
 using perftools::gputools::DeviceMemory;
 using perftools::gputools::DeviceMemoryBase;
 using perftools::gputools::ScratchAllocator;
+using perftools::gputools::dnn::RnnDirectionMode;
+using perftools::gputools::dnn::RnnInputMode;
+using perftools::gputools::dnn::RnnMode;
+using perftools::gputools::dnn::ToDataType;
 using perftools::gputools::port::StatusOr;
 
 Status ParseRNNMode(const string& str, RnnMode* rnn_mode) {
@@ -577,6 +577,7 @@ class CudnnRNNParamsSizeOp<GPUDevice, T, Index> : public CudnnRNNKernelCommon {
                               .TypeConstraint<int32>("S"), \
                           CudnnRNNParamsSizeOp<GPUDevice, T, int32>);
 
+TF_CALL_half(REGISTER_GPU);
 TF_CALL_float(REGISTER_GPU);
 TF_CALL_double(REGISTER_GPU);
 #undef REGISTER_GPU
@@ -668,25 +669,13 @@ class CudnnRNNParamsToCanonical<GPUDevice, T> : public CudnnRNNKernelCommon {
       }
       CHECK(size == width * height) << "Params size mismatch. Expected "
                                     << width * height << ", got " << size;
-      // If data is aligned, use slice view to avoid expensive memcpy.
-      bool start_aligned =
-          rnn_desc->ParamsWeightRegions()[i].offset % EIGEN_MAX_ALIGN_BYTES ==
-          0;
-      bool size_aligned = size_in_bytes % EIGEN_MAX_ALIGN_BYTES == 0;
-      if (start_aligned && size_aligned) {
-        int start = rnn_desc->ParamsWeightRegions()[i].offset / sizeof(T);
-        int end = start + size_in_bytes / sizeof(T);
-        context->set_output(i, input.Slice(start, end));
-      } else {
-        Tensor* output = nullptr;
-        OP_REQUIRES_OK(context, context->allocate_output(
-                                    i, TensorShape({width, height}), &output));
-        DeviceMemoryBase data_src_ptr = SliceDeviceMemory(
-            input_ptr, rnn_desc->ParamsWeightRegions()[i].offset,
-            size_in_bytes);
-        auto data_dst_ptr = StreamExecutorUtil::AsDeviceMemory<T>(*output);
-        stream->ThenMemcpy(&data_dst_ptr, data_src_ptr, size_in_bytes);
-      }
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(context, context->allocate_output(
+                                  i, TensorShape({height, width}), &output));
+      DeviceMemoryBase data_src_ptr = SliceDeviceMemory(
+          input_ptr, rnn_desc->ParamsWeightRegions()[i].offset, size_in_bytes);
+      auto data_dst_ptr = StreamExecutorUtil::AsDeviceMemory<T>(*output);
+      stream->ThenMemcpy(&data_dst_ptr, data_src_ptr, size_in_bytes);
     }
 
     OP_REQUIRES(context, num_params_ == rnn_desc->ParamsBiasRegions().size(),
@@ -700,24 +689,14 @@ class CudnnRNNParamsToCanonical<GPUDevice, T> : public CudnnRNNKernelCommon {
                   errors::InvalidArgument("Params size mismatch. Expected ",
                                           num_units, ", got ", size));
 
-      // If data is aligned, use slice view to avoid expensive memcpy.
-      bool start_aligned =
-          rnn_desc->ParamsBiasRegions()[i].offset % EIGEN_MAX_ALIGN_BYTES == 0;
-      bool size_aligned = size_in_bytes % EIGEN_MAX_ALIGN_BYTES == 0;
-      if (start_aligned && size_aligned) {
-        int start = rnn_desc->ParamsBiasRegions()[i].offset / sizeof(T);
-        int end = start + size_in_bytes / sizeof(T);
-        context->set_output(num_params_ + i, input.Slice(start, end));
-      } else {
-        Tensor* output = nullptr;
-        OP_REQUIRES_OK(context,
-                       context->allocate_output(num_params_ + i,
-                                                TensorShape({size}), &output));
-        DeviceMemoryBase data_src_ptr = SliceDeviceMemory(
-            input_ptr, rnn_desc->ParamsBiasRegions()[i].offset, size_in_bytes);
-        auto data_dst_ptr = StreamExecutorUtil::AsDeviceMemory<T>(*output);
-        stream->ThenMemcpy(&data_dst_ptr, data_src_ptr, size_in_bytes);
-      }
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(context,
+                     context->allocate_output(num_params_ + i,
+                                              TensorShape({size}), &output));
+      DeviceMemoryBase data_src_ptr = SliceDeviceMemory(
+          input_ptr, rnn_desc->ParamsBiasRegions()[i].offset, size_in_bytes);
+      auto data_dst_ptr = StreamExecutorUtil::AsDeviceMemory<T>(*output);
+      stream->ThenMemcpy(&data_dst_ptr, data_src_ptr, size_in_bytes);
     }
   }
 
@@ -733,6 +712,7 @@ class CudnnRNNParamsToCanonical<GPUDevice, T> : public CudnnRNNKernelCommon {
                               .HostMemory("input_size")     \
                               .TypeConstraint<T>("T"),      \
                           CudnnRNNParamsToCanonical<GPUDevice, T>);
+TF_CALL_half(REGISTER_GPU);
 TF_CALL_float(REGISTER_GPU);
 TF_CALL_double(REGISTER_GPU);
 #undef REGISTER_GPU
@@ -779,7 +759,9 @@ class CudnnRNNCanonicalToParams<GPUDevice, T> : public CudnnRNNKernelCommon {
                               .HostMemory("input_size")     \
                               .TypeConstraint<T>("T"),      \
                           CudnnRNNCanonicalToParams<GPUDevice, T>);
-TF_CALL_float(REGISTER_GPU) TF_CALL_double(REGISTER_GPU);
+TF_CALL_half(REGISTER_GPU);
+TF_CALL_float(REGISTER_GPU);
+TF_CALL_double(REGISTER_GPU);
 #undef REGISTER_GPU
 
 // Run the forward operation of the RNN model.
@@ -928,6 +910,7 @@ class CudnnRNNForwardOp<GPUDevice, T> : public CudnnRNNKernelCommon {
       Name("CudnnRNN").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
       CudnnRNNForwardOp<GPUDevice, T>);
 
+TF_CALL_half(REGISTER_GPU);
 TF_CALL_float(REGISTER_GPU);
 TF_CALL_double(REGISTER_GPU);
 #undef REGISTER_GPU
@@ -1147,6 +1130,7 @@ class CudnnRNNBackwardOp<GPUDevice, T> : public CudnnRNNKernelCommon {
       Name("CudnnRNNBackprop").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
       CudnnRNNBackwardOp<GPUDevice, T>);
 
+TF_CALL_half(REGISTER_GPU);
 TF_CALL_float(REGISTER_GPU);
 TF_CALL_double(REGISTER_GPU);
 #undef REGISTER_GPU

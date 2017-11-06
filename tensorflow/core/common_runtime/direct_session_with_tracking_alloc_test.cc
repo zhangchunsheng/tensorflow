@@ -37,6 +37,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/protobuf/rewriter_config.pb.h"
 #include "tensorflow/core/public/session.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/core/util/device_name_utils.h"
@@ -70,6 +71,9 @@ TEST(DirectSessionWithTrackingAllocTest, CostModelTest) {
   SessionOptions options;
   (*options.config.mutable_device_count())["CPU"] = 2;
   options.config.mutable_graph_options()->set_build_cost_model(1);
+  options.config.mutable_graph_options()
+      ->mutable_rewrite_options()
+      ->set_constant_folding(RewriterConfig::OFF);
   std::unique_ptr<Session> session(NewSession(options));
   TF_ASSERT_OK(session->Create(def));
   std::vector<std::pair<string, Tensor>> inputs;
@@ -154,14 +158,14 @@ static void TestHWAccelerator(bool enableHWTrace) {
   Tensor x_tensor(DT_FLOAT, TensorShape({2, 1}));
   test::FillValues<float>(&x_tensor, {1, 1});
   Node* x = test::graph::Constant(&graph, x_tensor);
-  x->set_assigned_device_name("/job:localhost/replica:0/task:0/gpu:0");
+  x->set_assigned_device_name("/job:localhost/replica:0/task:0/device:GPU:0");
 #ifdef TENSORFLOW_USE_SYCL
   x->set_assigned_device_name("/job:localhost/replica:0/task:0/device:SYCL:0");
 #endif // TENSORFLOW_USE_SYCL
 
   // y = A * x
   Node* y = test::graph::Matmul(&graph, a, x, false, false);
-  y->set_assigned_device_name("/job:localhost/replica:0/task:0/gpu:0");
+  y->set_assigned_device_name("/job:localhost/replica:0/task:0/device:GPU:0");
 #ifdef TENSORFLOW_USE_SYCL
 y->set_assigned_device_name("/job:localhost/replica:0/task:0/device:SYCL:0");
 #endif // TENSORFLOW_USE_SYCL
@@ -318,6 +322,9 @@ TEST(DirectSessionWithTrackingAllocTest, TrackMemoryAllocation) {
 
   SessionOptions options;
   (*options.config.mutable_device_count())["CPU"] = 2;
+  options.config.mutable_graph_options()
+      ->mutable_rewrite_options()
+      ->set_constant_folding(RewriterConfig::OFF);
   std::unique_ptr<Session> session(NewSession(options));
   TF_ASSERT_OK(session->Create(def));
   std::vector<std::pair<string, Tensor>> inputs;

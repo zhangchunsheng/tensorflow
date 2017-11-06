@@ -201,7 +201,7 @@ def variable(name, shape=None, dtype=None, initializer=None,
                      else [ops.GraphKeys.GLOBAL_VARIABLES])
 
   # Remove duplicates
-  collections = set(collections)
+  collections = list(set(collections))
   getter = variable_scope.get_variable
   if custom_getter is not None:
     getter = functools.partial(custom_getter,
@@ -562,7 +562,7 @@ def assign_from_checkpoint(model_path, var_list, ignore_missing_vars=False):
       grouped_vars[ckpt_name].append(var)
 
   else:
-    for ckpt_name, value in var_list.iteritems():
+    for ckpt_name, value in var_list.items():
       if isinstance(value, (tuple, list)):
         grouped_vars[ckpt_name] = value
       else:

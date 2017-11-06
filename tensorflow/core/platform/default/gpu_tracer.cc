@@ -315,7 +315,7 @@ class GPUTracerImpl : public GPUTracer,
     };
     return new Impl(name);
   }
-  Tracer *StartTracing(StringPiece label) override {
+  Tracer *StartTracing(StringPiece label, bool is_expensive) override {
     // We don't do anything with 'TraceMe' regions yet.
     return nullptr;
   }
@@ -579,8 +579,8 @@ Status GPUTracerImpl::Collect(StepStatsCollector *collector) {
   // TODO(pbar) Handle device IDs and prefix properly.
   const string prefix = "";
   const int id = 0;
-  const string stream_device = strings::StrCat(prefix, "/gpu:", id, "/stream:");
-  const string memcpy_device = strings::StrCat(prefix, "/gpu:", id, "/memcpy");
+  const string stream_device = strings::StrCat(prefix, "/device:GPU:", id, "/stream:");
+  const string memcpy_device = strings::StrCat(prefix, "/device:GPU:", id, "/memcpy");
 
   mutex_lock l2(trace_mu_);
   for (const auto &rec : kernel_records_) {
